@@ -73,6 +73,7 @@ jobs:
                       </intent-filter>
                   </activity>
 
+                  <!-- Truecaller-Style Floating Window Service -->
                   <service
                       android:name="flutter.overlay.window.flutter_overlay_window.OverlayService"
                       android:exported="false"
@@ -82,6 +83,7 @@ jobs:
                           android:value="accountability_overlay_service"/>
                   </service>
 
+                  <!-- M-Pesa Background SMS Receiver -->
                   <receiver
                       android:name="com.shounakmulay.telephony.sms.IncomingSmsReceiver"
                       android:permission="android.permission.BROADCAST_SMS"
@@ -98,20 +100,23 @@ jobs:
           </manifest>
           EOF
 
-      - name: Patch Plugin Namespaces & Enforce SDK 34 / minSdk 23
+      - name: Patch Plugin Namespaces & Fix Android SDK / JVM Configurations
         run: |
+          # 1. Patch cached plugins in PUB_CACHE with namespace declarations
           for build_file in $(find "$PUB_CACHE" -name "build.gradle"); do
             dir_path=$(dirname "$build_file")
             manifest_file="$dir_path/src/main/AndroidManifest.xml"
             if [ -f "$manifest_file" ]; then
               pkg=$(grep -oP 'package="\K[^"]+' "$manifest_file" || true)
               if [ -n "$pkg" ] && ! grep -q "namespace" "$build_file"; then
+                echo "Injecting namespace '$pkg' into $build_file"
                 sed -i "s/android {/android {\n    namespace '$pkg'/g" "$build_file"
               fi
               sed -i 's/package="[^"]*"//g' "$manifest_file"
             fi
           done
 
+          # 2. Enforce SDK versions in android/app/build.gradle
           if [ -f "android/app/build.gradle" ]; then
             sed -i 's/minSdkVersion .*/minSdkVersion 23/g' android/app/build.gradle
             sed -i 's/minSdk = .*/minSdk = 23/g' android/app/build.gradle
@@ -119,23 +124,31 @@ jobs:
             sed -i 's/compileSdk = .*/compileSdk = 34/g' android/app/build.gradle
           fi
 
+          # 3. Patch root build.gradle safely without triggering afterEvaluate lifecycle collisions
           cat << 'EOF' >> android/build.gradle
 
           subprojects {
-              afterEvaluate { project ->
-                  if (project.hasProperty('android')) {
-                      project.android {
-                          compileSdkVersion 34
-                          compileOptions {
-                              sourceCompatibility JavaVersion.VERSION_17
-                              targetCompatibility JavaVersion.VERSION_17
-                          }
+              project.plugins.withId('com.android.library') {
+                  project.android {
+                      compileSdkVersion 34
+                      compileOptions {
+                          sourceCompatibility JavaVersion.VERSION_17
+                          targetCompatibility JavaVersion.VERSION_17
                       }
                   }
-                  project.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
-                      kotlinOptions {
-                          jvmTarget = "17"
+              }
+              project.plugins.withId('com.android.application') {
+                  project.android {
+                      compileSdkVersion 34
+                      compileOptions {
+                          sourceCompatibility JavaVersion.VERSION_17
+                          targetCompatibility JavaVersion.VERSION_17
                       }
+                  }
+              }
+              tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+                  kotlinOptions {
+                      jvmTarget = "17"
                   }
               }
           }
