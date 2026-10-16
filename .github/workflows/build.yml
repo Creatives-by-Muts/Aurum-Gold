@@ -18,30 +18,30 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Set up Flutter
+      - name: Set up Flutter (Pinned Stable 3.24.5 for Reliable Plugin Compatibility)
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: '3.24.5'
           channel: 'stable'
           cache: true
 
       - name: Scaffold Native Android Project Files
         run: |
-          # Back up your custom pubspec.yaml and lib/main.dart
           cp pubspec.yaml pubspec.yaml.bak
           cp lib/main.dart main.dart.bak
 
-          # Generate missing android/ platform folders automatically
           flutter create --org com.aurum.ledger --project-name aurum_ledger .
 
-          # Restore your custom files
           mv pubspec.yaml.bak pubspec.yaml
           mv main.dart.bak lib/main.dart
+
+      - name: Install Flutter Dependencies
+        run: flutter pub get
 
       - name: Inject M-Pesa SMS & Truecaller Overlay Permissions into AndroidManifest.xml
         run: |
           cat << 'EOF' > android/app/src/main/AndroidManifest.xml
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-              package="com.aurum.ledger">
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
               <uses-permission android:name="android.permission.RECEIVE_SMS"/>
               <uses-permission android:name="android.permission.READ_SMS"/>
@@ -99,20 +99,41 @@ jobs:
           </manifest>
           EOF
 
-      - name: Enforce Android minSdkVersion 23 & Compile SDK 34
+      - name: Patch Plugin Namespaces & Enforce SDK 34 / minSdk 23
         run: |
-          sed -i 's/minSdkVersion .*/minSdkVersion 23/g' android/app/build.gradle || true
-          sed -i 's/minSdk = .*/minSdk = 23/g' android/app/build.gradle || true
+          # 1. Patch cached plugins (another_telephony & flutter_overlay_window) directly in PUB_CACHE
+          for build_file in $(find "$PUB_CACHE" -name "build.gradle"); do
+            dir_path=$(dirname "$build_file")
+            manifest_file="$dir_path/src/main/AndroidManifest.xml"
+            if [ -f "$manifest_file" ]; then
+              pkg=$(grep -oP 'package="\K[^"]+' "$manifest_file" || true)
+              if [ -n "$pkg" ] && ! grep -q "namespace" "$build_file"; then
+                echo "Injecting namespace '$pkg' into$build_file"
+                sed -i "s/android {/android {\n    namespace '$pkg'/g" "$build_file"
+              fi
+              # Strip deprecated package attribute from plugin AndroidManifest.xml for AGP 8+
+              sed -i 's/package="[^"]*"//g' "$manifest_file"
+            fi
+          done
 
-      - name: Install Flutter Dependencies
-        run: flutter pub get
+          # 2. Enforce minSdkVersion 23 and compileSdkVersion 34 in app/build.gradle
+          if [ -f "android/app/build.gradle" ]; then
+            sed -i 's/minSdkVersion .*/minSdkVersion 23/g' android/app/build.gradle
+            sed -i 's/minSdk = .*/minSdk = 23/g' android/app/build.gradle
+            sed -i 's/compileSdkVersion .*/compileSdkVersion 34/g' android/app/build.gradle
+            sed -i 's/compileSdk = .*/compileSdk = 34/g' android/app/build.gradle
+          fi
 
-      - name: Compile Release APK
-        run: flutter build apk --release --no-tree-shake-icons
+          # 3. Align Kotlin & Java JVM targets across all subprojects in root android/build.gradle
+          cat << 'EOF' >> android/build.gradle
 
-      - name: Upload Compiled Aurum APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: Aurum-Ledger-Release-APK
-          path: build/app/outputs/flutter-apk/app-release.apk
-          
+          subprojects {
+              afterEvaluate { project ->
+                  if (project.hasProperty('android')) {
+                      project.android {
+                          compileSdkVersion 34
+                          compileOptions {
+                              sourceCompatibility JavaVersion.VERSION_17
+                              targetCompatibility JavaVersion.VERSION_17
+                          }
+                      
