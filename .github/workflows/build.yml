@@ -39,11 +39,23 @@ jobs:
       - name: Install Flutter Dependencies
         run: flutter pub get
 
-      - name: Inject M-Pesa SMS & Truecaller Overlay Permissions into AndroidManifest.xml
+      - name: Update MainActivity to FlutterFragmentActivity (Required for Biometrics)
+        run: |
+          cat << 'EOF' > android/app/src/main/kotlin/com/aurum/ledger/MainActivity.kt
+          package com.aurum.ledger
+
+          import io.flutter.embedding.android.FlutterFragmentActivity
+
+          class MainActivity: FlutterFragmentActivity() {
+          }
+          EOF
+
+      - name: Inject Permissions into AndroidManifest.xml
         run: |
           cat << 'EOF' > android/app/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+              <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
               <uses-permission android:name="android.permission.RECEIVE_SMS"/>
               <uses-permission android:name="android.permission.READ_SMS"/>
               <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
@@ -73,7 +85,7 @@ jobs:
                       </intent-filter>
                   </activity>
 
-                  <!-- Truecaller-Style Floating Window Service -->
+                  <!-- Truecaller Floating Window Service -->
                   <service
                       android:name="flutter.overlay.window.flutter_overlay_window.OverlayService"
                       android:exported="false"
@@ -83,7 +95,7 @@ jobs:
                           android:value="accountability_overlay_service"/>
                   </service>
 
-                  <!-- M-Pesa Background SMS Receiver -->
+                  <!-- M-Pesa SMS Receiver -->
                   <receiver
                       android:name="com.shounakmulay.telephony.sms.IncomingSmsReceiver"
                       android:permission="android.permission.BROADCAST_SMS"
@@ -102,7 +114,6 @@ jobs:
 
       - name: Patch Cached Plugin Namespaces & App SDK Configuration
         run: |
-          # 1. Inject namespace into cached plugins in PUB_CACHE if missing
           for build_file in $(find "$PUB_CACHE" -name "build.gradle"); do
             dir_path=$(dirname "$build_file")
             manifest_file="$dir_path/src/main/AndroidManifest.xml"
@@ -115,7 +126,6 @@ jobs:
             fi
           done
 
-          # 2. Configure compileSdk and minSdk directly in android/app/build.gradle
           if [ -f "android/app/build.gradle" ]; then
             sed -i 's/minSdkVersion .*/minSdkVersion 23/g' android/app/build.gradle
             sed -i 's/minSdk = .*/minSdk = 23/g' android/app/build.gradle
